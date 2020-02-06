@@ -1,0 +1,195 @@
+---
+title: "Introduction to model comparisons"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+  pdf_document: default
+  word_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi=300)
+```
+
+**Sean Trott**  
+
+# High-level goals
+
+This began as a subsection in another tutorial on [mixed models in R](https://seantrott.github.io/mixed_models_R/). While writing that tutorial, I realized that a lengthy discussion of model comparison approaches probably deserves its own post. 
+
+So keeping that in mind, the main goals of this tutorial are to address the following questions:
+
+1) What *is* model comparison?  
+2) What's the conceptual intuition behind a model comparison?  
+3) What are the different kinds of model comparison approaches?
+
+# Load libraries
+
+First, logistics. We'll be working with two main libraries: `library(tidyverse)` and `library(lme4)`. If you don't have them installed already, use `install.packages("tidyverse")` and `install.packages("lme4")` to install them.
+
+```{r include=FALSE}
+library(tidyverse)
+library(lme4)
+```
+
+# Introduction
+
+Science involves building **models** of the world. In fact, some would say that's the goal of science. 
+
+These models range from verbal descriptions of a phenomenon to statistical models that make quantitative predictions. I'll be focusing more on the latter kind of model today---though it's worth keeping in mind that the term "model" is often used loosely. 
+
+Typically, statistical models include terms that are meant to stand in for some *theoretical construct*. We then use our algorithm of choice to **fit** a model and find the parameters that minimize the prediction error between our actual $Y$ values and the values predicted by the model.
+
+A good statistical model should satisfy the following criteria:
+
+1) **Accuracy**: A model should describe data accurately and generate accurate predictions.  
+2) **Parsimony**: All else being equal, we should prefer a simpler model with fewer assumptions (i.e., fewer parameters).  
+
+Thus, the goal of a model selection procedure is to settle on the simplest model that best explains your data^[One useful way to think about a statistical model is as a *description* of a phenomenon. There are many ways to describe the same phenomenon, and these distinct descriptions (or *explanations*) involve different factors.]. 
+
+
+## Model comparison: Background
+
+The core idea behind the model comparison approach is to compare the **explanatory power** of two or more models, with the goal of identifying the model that best explains variance in $Y$. Of course, a model with more parameters will *always* explain more variance than a model with less. That is, if $N$ is the number of observations and $k$ is the number of parameters, the model will necessarily improve its predictions as $k$ approaches $N$. This can result in **overfitting**: a model whose parameters are too tuned to the variance specific to a particular dataset, and thus exhibits poor generalizability across datasets. So reducing variance in $Y$ isn't our only goal: we also want a **parsimonious** model.
+
+Theoretically, you can compare any two models. Here, we'll be comparing **nested** models fit to the same data, in which only a single parameter differs, e.g., $M_{k}$ and $M_{k-1}$. This allows us to infer the explanatory power of the parameter added in the full model $M_{k}$: if such a parameter substantially improves the model by some measure of model fit, we can infer that this parameter explains variance in $Y$. 
+
+There are a number of different model comparison methods, each designed with the twin goals of:
+
+1) Comparing the amount of *variance* explained by $M_{k}$ and $M_{k-1}$. 
+2) Enforcing model parsimony; all else being equal, we prefer a simpler model (e.g., $M_{k-1}$) over a model with more parameters ($M_{k}$).  
+
+These goals correspond to the high-level goals of **accuracy** and **parsimony** mentioned earlier.
+
+Below, I introduce and describe a few different appraoches to model comparison.
+
+# Likelihood ratio tests
+
+The **likelihood** of a model, $L(M_{k})$, is a way of quantifying how well a model fits the data; it's formally equivalent to the probability of our data, given the model, $p(Y | M_{k})$^[If you're interested in how likelihoods are actually calculated, there are a number of other great resources for reading about it  [here](https://towardsdatascience.com/a-gentle-introduction-to-maximum-likelihood-estimation-9fbff27ea12f), [here](https://en.wikipedia.org/wiki/Likelihood_function#Likelihood_ratio_and_relative_likelihood), [here](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation), and [pg. 133, here](http://faculty.marshall.usc.edu/gareth-james/ISL/ISLR%20Seventh%20Printing.pdf). [MLE](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation) is also the optimization procedure used to estimate coefficients in many algorithms.]. That is, what's the probability that a given model "created" our observed data? 
+
+A likelihood ratio test thus compares the likelihoods of two different models, e.g., $L(M_{k})$ and $L(M_{k-1})$. Formally, this is expressed as follows:
+
+$LR = -2 * ln(\frac{L(M_{k-1})}{L(M_{k})})$
+
+Let's work through this formula piece by piece. Better models should have higher likelihoods; thus, the better our full model is than our reduced model, the smaller the value expressed by $\frac{L(M_{k-1})}{L(M_{k})}$ should be. Taking the **log** of this value will thus result in more *negative* values for smaller values. And finally, we multiply this value by $-2$. 
+
+Putting it all together: smaller absolute values for the ratio between our full and reduced model (i.e., a higher likelihood for our full model than reduced model) lead to larger likelihood ratios. This is illustrated below:
+
+```{r}
+inner_ratios = seq(.01, 1, by=.001)
+log_ratios = log(inner_ratios)
+likelihood_ratio = -2 * log_ratios
+
+df_loglik_example = data.frame(ir = inner_ratios,
+                               lr = log_ratios,
+                               ll = likelihood_ratio)
+
+df_loglik_example %>%
+  ggplot(aes(x = inner_ratios,
+             y = ll)) + 
+  geom_point() +
+  labs(title = "Log(ratio) by ratio",
+       x = "L(reduced)/L(full)",
+       y = "Likelihood ratio (LR)") +
+  theme_minimal()
+```
+
+As the raw ratio approaches 1, our likelihood ratio approaches 0; i.e., there's not much of a difference between our models. And as our raw ratio approaches 0, our likelihood ratio gets larger and larger.
+
+Note that this equation is often simplified into a comparison of the **log likelihoods** of our two models^[This is also handy, because log likelihood is what's usually used in MLE, simply because minimizing the log likelihood is an easier cost function to optimize than maximizing the raw likelihood]:
+
+$LR = -2 * (LogLikelihood(M_{k-1})) - LogLikelihood(L(M_{k})))$
+
+At this point, you might be wondering: what can I do with this likelihood ratio ($LR$)? As we saw, a larger $LR$ means that our full model is better than our reduced model. But how do we decide *how* much better? For example, how can we decide what's a *significant* difference between our models?
+
+It turns out that there's a formal proof called [Wilks' Theorem](https://en.wikipedia.org/wiki/Wilks%27_theorem), which states that as our sample size approaches infinity, the distribution of our log-likelihood ratios approximates the well-known [chi-squared distribution](https://en.wikipedia.org/wiki/Chi-squared_distribution)^[Though see [here](https://en.wikipedia.org/wiki/Wilks%27_theorem#Invalid_for_random_or_mixed_effects_models) for a brief discussion of when this assumption doesn't hold.]. Under this assumption, we can thus obtain a p-value for our model by looking up this $LR$ in the appropriate chi-squared distribution, i.e., the distribution with the corresponding **degrees of freedom** ($DF$). Here, $DF$ is the *difference* in degrees of freedom between our models. Often this corresponds to the difference in the number of parameters between our full model and reduced model; if there's only one parameter added to our full model, then $DF = 1$^[Again, this gets complicated (or less intuitive) when you add more complex parameters, e.g., a categorical variable with four levels.]. 
+
+Recall that the same chi-squared statistic will have different p-values depending on the $DF$. Roughly, the higher your $DF$, the more likely your chi-squared statistic is to appear in the corresponding null distribution, thus resulting in a higher p-value (i.e., less significant result). For exampl,e a chi-squared value of 4 is relatively unlikely (low p-value) when $DF = 1$, but is considerably more likely when $DF = 5$. 
+
+```{r}
+df_chi = data.frame(
+  "df 1" = rchisq(1000, 1),
+  # "df 2" = rchisq(1000, 2),
+  # "df 3" = rchisq(1000, 3),
+  # "df 4" = rchisq(1000, 4),
+  "df 5" = rchisq(1000, 5)
+) %>%
+  gather()
+
+df_chi$DF = df_chi$key
+
+df_chi %>%
+  ggplot(aes(x = value,
+             fill = DF)) +
+  geom_density(alpha = .4) +
+  labs(title = "Null chi-squared distributions for varying DF",
+       x = "Chi-squared statistic") +
+  theme_minimal()
+
+```
+
+Assuming that each of our simulated model comparisons earlier differed only in one parameter, we can obtain p-values for each of the $LR$ values by looking up that value in the corresponding chi-squared distribution. Below is a visualization of the **p-values** for a set of **log likelihood ratios** (the dotted line represents the typical $p < .05$ significance threshold): 
+
+```{r}
+# Obtain p-value by looking up actual value in a chi-squared distribution, where DF = 1
+df_loglik_example$p1 = 1 - pchisq(df_loglik_example$ll, 1)
+
+df_loglik_example %>%
+  ggplot(aes(x = ll,
+             y = p1)) + 
+  geom_point() +
+  labs(title = "P-values of different log-likelihood ratios (DF = 1)",
+       x = "Likelihood ratio (LR)",
+       y = "p-value (assuming DF=1)") +
+  geom_hline(yintercept = .05, linetype = "dotted") +
+  theme_minimal()
+```
+
+As you'd expect, the p-values get smaller (more significant) as our likelihood ratio increases. On top of this plot, we can also look at the distribution of p-values for the **same likelihood ratios**, but with different degrees of freedom; the black line corresponds to $DF = 1$, and the red line corresponds to $DF = 2$: 
+
+```{r}
+df_loglik_example$p2 = 1 - pchisq(df_loglik_example$ll, 2)
+
+df_loglik_example %>%
+  ggplot(aes(x = ll,
+             y = p1)) + 
+  geom_point() +
+  geom_point(aes(x = ll, y = p2), color = "red") +
+  labs(title = "P-values of different log-likelihood ratios (DF = 1, 2)",
+       x = "Likelihood ratio (LR)",
+       y = "p-value") +
+  geom_hline(yintercept = .05, linetype = "dotted") +
+  theme_minimal()
+```
+
+Importantly, the same $LR$ value is associated with a different p-value as a function of the $DF$.
+
+# Contact
+
+If you have any questions, comments, or criticisms about anything in this tutorial, don't hesitate to contact me by email: the username is "sttrott"," at *ucsd.edu*. I'll likely augment this tutorial with more details (or pointers to other resources) over time.
+
+# References
+
+Barr, D. J., Levy, R., Scheepers, C., & Tily, H. J. (2013). Random effects structure for confirmatory hypothesis testing: Keep it maximal. Journal of memory and language, 68(3), 255-278. [Link](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3881361/)
+
+Bates, D., Mächler, M., Bolker, B., & Walker, S. (2014). Fitting linear mixed-effects models using lme4. arXiv preprint arXiv:1406.5823. [Link](https://arxiv.org/pdf/1406.5823.pdf)
+
+Bates, D., Kliegl, R., Vasishth, S., & Baayen, H. (2015). Parsimonious mixed models. arXiv preprint arXiv:1506.04967. [Link](https://arxiv.org/pdf/1506.04967.pdf)
+
+Clark (2019, May 14). Michael Clark: Shrinkage in Mixed Effects Models. Retrieved from https://m-clark.github.io/posts/2019-05-14-shrinkage-in-mixed-models/ [Link](https://m-clark.github.io/posts/2019-05-14-shrinkage-in-mixed-models/)
+
+Freeman, M. Hierarchical Models. [Link](http://mfviz.com/hierarchical-models/)
+
+Piccininni, P. Linear mixed effects models. [Link](https://pagepiccinini.com/r-course/lesson-6-part-1-linear-mixed-effects-models/) 
+
+Winter, B. (2013). Linear models and linear mixed effects models in R with linguistic applications. arXiv preprint arXiv:1308.5499. [Link](https://arxiv.org/ftp/arxiv/papers/1308/1308.5499.pdf)
+
+# Citation
+
+For citation, please cite as:
+
+Trott, S. (2019). Mixed models in R. Retrieved from https://seantrott.github.io/mixed_models_R/.
+
+# Footnotes
