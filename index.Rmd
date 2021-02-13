@@ -17,21 +17,31 @@ knitr::opts_chunk$set(echo = TRUE, dpi=300)
 
 # High-level goals
 
-This began as a subsection in another tutorial on [mixed models in R](https://seantrott.github.io/mixed_models_R/). While writing that tutorial, I realized that a lengthy discussion of model comparison approaches probably deserves its own post. 
+This began as a subsection in another tutorial on [mixed models in R](https://seantrott.github.io/mixed_models_R/). While writing that tutorial, I realized that a lengthier discussion of model comparison approaches probably deserves its own post. 
 
 So keeping that in mind, the main goals of this tutorial are to address the following questions:
 
 1) What *is* model comparison?  
 2) What's the conceptual intuition behind a model comparison?  
-3) What are the different kinds of model comparison approaches?
+3) What are some of the different kinds of model comparison approaches?
 
-# Load libraries
+Additionally, this tutorial will likely change over time as I learn more about the domain (mostly in the direction of including more details and content). So if you see anything missing, please let me know and I will try to add it.
 
-First, logistics. We'll be working with two main libraries: `library(tidyverse)` and `library(lme4)`. If you don't have them installed already, use `install.packages("tidyverse")` and `install.packages("lme4")` to install them.
+# Logistics
+
+First, logistics. We'll be working with three main libraries: `library(tidyverse)` and `library(lme4)` and `library(lmtest)`. If you don't have them installed already, use `install.packages("tidyverse")` and `install.packages("lme4")` and `install.packages("lmtest")` to install them.
 
 ```{r include=FALSE}
 library(tidyverse)
 library(lme4)
+library(lmtest)
+```
+
+
+Also, if you want to clone a copy of this tutorial locally on your computer, you can do so with `git`:
+
+```
+git clone https://github.com/seantrott/model_comparison.git
 ```
 
 # Introduction
@@ -40,19 +50,19 @@ Science involves building **models** of the world. In fact, some would say that'
 
 These models range from verbal descriptions of a phenomenon to statistical models that make quantitative predictions. I'll be focusing more on the latter kind of model today---though it's worth keeping in mind that the term "model" is often used loosely. 
 
-Typically, statistical models include terms that are meant to stand in for some *theoretical construct*. We then use our algorithm of choice to **fit** a model and find the parameters that minimize the prediction error between our actual $Y$ values and the values predicted by the model.
+Typically, statistical models include terms that are meant to stand in for some *theoretical construct*. We then use our algorithm of choice to **fit** a model and find the set of parameters (i.e., *coefficients*) $\theta$ that minimize the prediction error between our actual $Y$ values and the values predicted by the model, $\hat{Y}$.
 
-A good statistical model should satisfy the following criteria:
+A good statistical model should satisfy the following criteria^[I'm not going to devote too much space to justifying why these critera are important. Accuracy is fairly straightforward: from a theory-neutral perspective, we'd prefer a better description of the data to a worse description. Defenses of parsimony usually cite [Occam's razor](https://en.wikipedia.org/wiki/Occam%27s_razor); there's a long history of various philosophers defending parsimony, with the arguments given ranging from aesthetic preferences to pragmatic considerations. I'll just say it's not a *completely* settled matter, but I guess I lean towards the pragmatic side: I worry that the inclusion of too many parameters leads to models that overfit the data. But of course, the real world is indeed very complex, and sometimes the more complicated model is preferable or even necessary. Ultimately it's not an issue that can be resolved purely algorithmically, independent of context. See also the [bias-variance trade-off](https://seantrott.github.io/procrustean_models/#Variance:_the_other_side_of_flexibility).]:
 
 1) **Accuracy**: A model should describe data accurately and generate accurate predictions.  
 2) **Parsimony**: All else being equal, we should prefer a simpler model with fewer assumptions (i.e., fewer parameters).  
 
-Thus, the goal of a model selection procedure is to settle on the simplest model that best explains your data^[One useful way to think about a statistical model is as a *description* of a phenomenon. There are many ways to describe the same phenomenon, and these distinct descriptions (or *explanations*) involve different factors.]. 
+Thus, from this point of view, the goal of a model selection procedure is to settle on the simplest model that best explains your data^[One useful way to think about a statistical model is as a *description* of a phenomenon. There are many ways to describe the same phenomenon, and these distinct descriptions (or *explanations*) involve different factors.]. 
 
 
 ## Model comparison: Background
 
-The core idea behind the model comparison approach is to compare the **explanatory power** of two or more models, with the goal of identifying the model that best explains variance in $Y$. Of course, a model with more parameters will *always* explain more variance than a model with less. That is, if $N$ is the number of observations and $k$ is the number of parameters, the model will necessarily improve its predictions as $k$ approaches $N$. This can result in **overfitting**: a model whose parameters are too tuned to the variance specific to a particular dataset, and thus exhibits poor generalizability across datasets. So reducing variance in $Y$ isn't our only goal: we also want a **parsimonious** model.
+The core idea behind the model comparison approach is to compare the **explanatory power** of two or more models, with the goal of identifying the model that best explains variance in $Y$. Of course, a model with more parameters will almost always explain slightly more variance than a model with less. That is, if $N$ is the number of observations and $k$ is the number of parameters, the model will necessarily improve its predictions as $k$ approaches $N$. This can result in **overfitting**: a model whose parameters are too tuned to the [variance specific to a particular dataset](https://seantrott.github.io/procrustean_models/#Variance:_the_other_side_of_flexibility), and thus exhibits poor generalizability across datasets. So reducing variance in $Y$ isn't our only goal: we also want a **parsimonious** model.
 
 Theoretically, you can compare any two models. Here, we'll be comparing **nested** models fit to the same data, in which only a single parameter differs, e.g., $M_{k}$ and $M_{k-1}$. This allows us to infer the explanatory power of the parameter added in the full model $M_{k}$: if such a parameter substantially improves the model by some measure of model fit, we can infer that this parameter explains variance in $Y$. 
 
@@ -63,133 +73,1100 @@ There are a number of different model comparison methods, each designed with the
 
 These goals correspond to the high-level goals of **accuracy** and **parsimony** mentioned earlier.
 
-Below, I introduce and describe a few different appraoches to model comparison.
+Below, I introduce and describe a few different appraoches to model comparison. The section on likelihood ratio tests is particularly long, but that's because I also introduce/describe what likelihood is. Fortunately, those insights should transfer to understanding AIC and BIC as well.
 
 # Likelihood ratio tests
 
-The **likelihood** of a model, $L(M_{k})$, is a way of quantifying how well a model fits the data; it's formally equivalent to the probability of our data, given the model, $p(Y | M_{k})$^[If you're interested in how likelihoods are actually calculated, there are a number of other great resources for reading about it  [here](https://towardsdatascience.com/a-gentle-introduction-to-maximum-likelihood-estimation-9fbff27ea12f), [here](https://en.wikipedia.org/wiki/Likelihood_function#Likelihood_ratio_and_relative_likelihood), [here](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation), and [pg. 133, here](http://faculty.marshall.usc.edu/gareth-james/ISL/ISLR%20Seventh%20Printing.pdf). [MLE](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation) is also the optimization procedure used to estimate coefficients in many algorithms.]. That is, what's the probability that a given model "created" our observed data? 
+The **likelihood** of a model, $\mathcal{L}(M_{k})$, is a way of quantifying how well a model fits the data. It's akin to asking: what is the likelihood that a given model (or *hypothesis*) generated a given dataset? 
 
-A likelihood ratio test thus compares the likelihoods of two different models, e.g., $L(M_{k})$ and $L(M_{k-1})$. Formally, this is expressed as follows:
+A **likelihood ratio test**, then, *compares* the likelihoods of different models for the same data. The basic intuition is that we should prefer the model under which the data are more likely; if the data are equally likely under both models, then there's no reason to prefer one model over another (except for, say, one model having fewer parameters). 
 
-$LR = -2 * ln(\frac{L(M_{k-1})}{L(M_{k})})$
+Edwards (1992), quoted in [Etz (2018)](https://journals.sagepub.com/doi/pdf/10.1177/2515245917744314), puts this better than I could:
 
-Let's work through this formula piece by piece. Better models should have higher likelihoods; thus, the better our full model is than our reduced model, the smaller the value expressed by $\frac{L(M_{k-1})}{L(M_{k})}$ should be. Taking the **log** of this value will thus result in more *negative* values for smaller values. And finally, we multiply this value by $-2$. 
+> The Law of Likelihood states that "within the framework of a statistical model, a particular set of data supports one statistical hypothesis better than another if the likelihood of the first hypothesis, on the data, exceeds the likelihood of the second hypothesis" (Edwards, 1992, p. 30).
 
-Putting it all together: smaller absolute values for the ratio between our full and reduced model (i.e., a higher likelihood for our full model than reduced model) lead to larger likelihood ratios. This is illustrated below:
+## Calculating likelihood
+
+Model likelihood is calculated using a **likelihood function**: for a predictor matrix $X$, parameters $\theta$, and observations $y$, compute the likelihood $\mathcal{L}$of $y$ given $X$ and $\theta$, i.e., $\mathcal{L}(y | \theta, X)$. In **maximum likelihood estimation** (MLE), the goal is to (as the name implies) *maximize* this likelihood^[Or, in practice, *minimize* the negative log-likelihood (NLL). This is because it is apparently easier to build optimization algorithms that *minimize* a function.], i.e., identify the set of parameter values for predictors $X$ that will best explain the data $y$.
+
+### Comparison to OLS regression
+
+If you're familiar with [Ordinary Least Squares (OLS) regression](https://en.wikipedia.org/wiki/Ordinary_least_squares), this might sound familiar. With OLS, the goal is to find the set of coefficient values that *minimize* the sum of squared residuals (i.e., the difference between predictions $\hat{y}$ and $y$), where that sum is defined as follows:
+
+$\sum{(\hat{y} - y)^2}$
+
+In essence, the sum of squared residuals measures the "distance" between the predictions from your model and the actual values in your data. OLS thus makes intuitive sense: with linear regression, we want to identify the best-fitting *line*, where "best fit" is the line with the smallest deviations in the real data.
+
+Let's illustrate this quickly with an example. I'll first generate a set of data according to a linear equation, with some amount of normally distributed noise added:
+
+$Y = 10 + 2X + \epsilon$
 
 ```{r}
-inner_ratios = seq(.01, 1, by=.001)
-log_ratios = log(inner_ratios)
-likelihood_ratio = -2 * log_ratios
+set.seed(1)
+X = c(1:100)
+Y = 10 + 2 * X + rnorm(n = length(X), sd = 20)
 
-df_loglik_example = data.frame(ir = inner_ratios,
-                               lr = log_ratios,
-                               ll = likelihood_ratio)
+df_xy = data.frame(X, Y)
 
-df_loglik_example %>%
-  ggplot(aes(x = inner_ratios,
-             y = ll)) + 
-  geom_point() +
-  labs(title = "Log(ratio) by ratio",
-       x = "L(reduced)/L(full)",
-       y = "Likelihood ratio (LR)") +
+df_xy %>%
+  ggplot(aes(x = X,
+             y = Y)) +
+  geom_point(alpha = .6) +
   theme_minimal()
 ```
 
-As the raw ratio approaches 1, our likelihood ratio approaches 0; i.e., there's not much of a difference between our models. And as our raw ratio approaches 0, our likelihood ratio gets larger and larger.
 
-Note that this equation is often simplified into a comparison of the **log likelihoods** of our two models^[This is also handy, because log likelihood is what's usually used in MLE, simply because minimizing the log likelihood is an easier cost function to optimize than maximizing the raw likelihood]:
+Now let's draw a couple different lines on top of this data, i.e., using different *intercepts* and different *slopes*. Keep in mind that the **ground truth** line, i.e., the function that's responsible for generating the data, is defined by $\beta_0 = 10, \beta_1 = 2$; this line is shown in blue.
 
-$LR = -2 * (LogLikelihood(M_{k-1})) - LogLikelihood(L(M_{k})))$
+```{r}
+df_xy %>%
+  ggplot(aes(x = X,
+             y = Y)) +
+  geom_point(alpha = .6) +
+  geom_abline(intercept = 10, slope = 2, color = "blue", alpha = .6) +
+  geom_abline(intercept = 20, slope = 1.5, color = "red", alpha = .6, linetype = "dotted") +
+  geom_abline(intercept = 5, slope = 3, color = "red", alpha = .6, linetype = "dotted") +
+  geom_abline(intercept = 40, slope = .5, color = "red", alpha = .6, linetype = "dotted") +
+  theme_minimal()
+```
 
-At this point, you might be wondering: what can I do with this likelihood ratio ($LR$)? As we saw, a larger $LR$ means that our full model is better than our reduced model. But how do we decide *how* much better? For example, how can we decide what's a *significant* difference between our models?
+It's pretty obvious that some of these lines are better **fits** than others. We can actually plug in the slope/intercept values for each line into a linear equation, and just measure the residuals from the predictions for each one.
 
-It turns out that there's a formal proof called [Wilks' Theorem](https://en.wikipedia.org/wiki/Wilks%27_theorem), which states that as our sample size approaches infinity, the distribution of our log-likelihood ratios approximates the well-known [chi-squared distribution](https://en.wikipedia.org/wiki/Chi-squared_distribution)^[Though see [here](https://en.wikipedia.org/wiki/Wilks%27_theorem#Invalid_for_random_or_mixed_effects_models) for a brief discussion of when this assumption doesn't hold.]. Under this assumption, we can thus obtain a p-value for our model by looking up this $LR$ in the appropriate chi-squared distribution, i.e., the distribution with the corresponding **degrees of freedom** ($DF$). Here, $DF$ is the *difference* in degrees of freedom between our models. Often this corresponds to the difference in the number of parameters between our full model and reduced model; if there's only one parameter added to our full model, then $DF = 1$^[Again, this gets complicated (or less intuitive) when you add more complex parameters, e.g., a categorical variable with four levels.]. 
+```{r}
+y_real = 10 + 2*X
+y1 = 20 + 1.5 * X
+y2 = 5 + 3 * X
+y3 = 40 + .5 * X
 
-Recall that the same chi-squared statistic will have different p-values depending on the $DF$. Roughly, the higher your $DF$, the more likely your chi-squared statistic is to appear in the corresponding null distribution, thus resulting in a higher p-value (i.e., less significant result). For exampl,e a chi-squared value of 4 is relatively unlikely (low p-value) when $DF = 1$, but is considerably more likely when $DF = 5$. 
+df_rss = data.frame(
+  real = sum((Y - y_real)**2),
+  m1 = sum((Y - y1)**2),
+  m2 = sum((Y - y2)**2),
+  m3 = sum((Y - y3)**2)) %>%
+  pivot_longer(c(real, m1, m2, m3), names_to = "model", values_to = "rss")
+  
+
+df_rss %>%
+  ggplot(aes(x = reorder(model, rss),
+             y = rss)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Model",
+       y = "RSS") +
+  theme_minimal()
+
+```
+
+As you'd expect, the residual sum of squares is lowest for the predictions produced by the real equation. The RSS is still non-zero, simply because the actual data have some degree of noise. But it's still a much better fit than the other models; hopefully this helps build your intuition for what it *means* for a model to have worse or better fit, and what exactly something like RSS is measuring. You can also check out my tutorial on the [bias-variance trade-off](https://seantrott.github.io/procrustean_models/#Variance:_the_other_side_of_flexibility) for more details on this.
+
+### OLS vs. MLE
+
+OLS is actually a derivation of a more general approach to parameter estimation: maximum likelihood estimation (MLE). With MLE---as in OLS---we want to identify a set of parameters that *maximizes* the likelihood of our data. 
+
+This requires calculating the **likelihood** of a model, $\mathcal{L}$:
+
+$\mathcal{L}(\theta | x_1, x_2, ..., x_n) = f(x_1, x_2, ..., x_n | \theta)$
+
+In particular, we want to calculate the joint probability of each data point, under the model's estimated parameters. We can write that as follows:
+
+$\mathcal{L}(\theta | X) = \prod\limits_{i=1}^N p(X_i | \theta)$
+
+One issue with this formulation is that the probability densities for each data point can quickly become either very small or very large, depending on the sample size and the variance of the underlying distribution. Computers can only store up to so many digits before "rounding" a number to either `0` or `Inf`. But this is clearly non-ideal, as the product of any sequence of numbers including `0` will be `0` (and `Inf` for a sequence of numbers including `Inf`). Furthermore, as described [here](https://www.r-bloggers.com/2019/08/maximum-likelihood-estimation-from-scratch/), this formulation requires us to find parameter estimates that *maximize* the likelihood of a model, which is a harder optimization problem than *minimizing* a value (in this case, minimizing the **negative log likelihood**).
+
+Thus, typically we rewrite this as the **sum of log probabilities**.
+
+$\mathcal{L}(\theta | X) = \sum\limits_{i=1}^N log(p(X_i | \theta))$
+
+But how exactly is $p(X_i | \theta)$ calculated? The details will depend on aspects of the data (e.g., whether it's discrete or continuous) and the class of model being applied (e.g., whether we're using linear or logistic regression). To build intuition for how this works, it helps to back up just a bit: instead of thinking about calculating the likelihood of data under a complicated statistical model, let's think about how to calculate the likelihood of data under various probability distributions.
+
+### Back to basics: likelihood and distributions
+
+We can think of a probability distribution as a **generative process**: for any possible value $X_i$, a probability function assigns some probability mass (or density) to that value. This can be used to *generate* data, or *evaluate* the likelihood of a given data point under that distribution.
+
+#### Continuous distributions
+
+Let's start with a **normal distribution**. A [normal distribution](https://en.wikipedia.org/wiki/Normal_distribution) is a real-valued, continuous probability distribution parameterized by a mean, $\mu$, and standard deviation, $\sigma$; the mean is equal to the median and the mode. We can simulate a set of normally distributed data using `rnorm`:
+
+```{r}
+set.seed(1)
+X = rnorm(n = 1000, mean = 0, sd = 10)
+hist(X)
+```
+
+This distribution has the following parameters: $\mu = 0, \sigma = 10$. 
+
+Just looking at this distribution, it's very clear that some values are more likely than others. For example, we're much more likely to obtain a value close to `0` (the mean of the distribution) than a value close to `20`. 
+
+We can use `dnorm` to calculate the probability density for each of these values of $X$. The density function for some value $x$ is defined as the following:
+
+$f(x) = \frac{1}{\sigma\sqrt{2\pi}}e^{-\frac{1}{2}(\frac{x - \mu}{\sigma})^2}$
+
+But fortunately, we can also just use the `dnorm` function in R. As you'd expect with the parameters of this normal distribution, values closer to `0` are more likely than those close to `20`:
+
+```{r}
+plot(X, dnorm(X, mean = 0, sd = 10))
+```
+
+Each of those values of $X$ is assigned a *likelihood*. To find the likelihood of *all* our data, i.e., $\mathcal{L}(X|\theta)$, we would have to multiply each of these probability values---or *sum* their log probabilities. We can do this by first applying `log` to the output of the `dnorm` function, then using `sum` to add up all those logged probabilities:
+
+```{r}
+sum(log(dnorm(X, mean = 0, sd = 10)))
+```
+
+This number may not make a ton of sense out of context. But it's worth thinking about exactly what we just did:
+
+1. First, we generated a bunch of data by drawing samples from a normal distribution with parameters $\mu = 0, \sigma = 10$.  
+2. Then, for each of those data points, we calculated the probability density of that value under a normal distribution with parameters $\mu = 0, \sigma = 10$.  
+3. Finally, we summed all of those *log* probabilities.
+
+That final step gives us the *log probability*, $\mathcal{L}$, of our parameters, $\theta$! 
+
+Now imagine that we didn't know the parameters used to generate our dataset $X$, and we wanted to estimate them. How would you go about this?
+
+One intuitive way to do this is to search the space of possible parameters, i.e., values for $\mu$ and $\sigma$, and for each parameter set $\theta$, calculate the log likelihood of the data under those parameters. We can then select the parameters that yield the best likelihood. In the simplest iteration, we can do something called a **grid search**^[Note that as our parameter space increases, a grid search becomes computationally intractable].
+
+For simplicity, let's assume we already know the standard deviation, $\sigma$, and we want to just estimate the mean, $\mu$. Let's consider all the integers between -50 and 50^[Put in more Bayesian terms, this is our set of **hypotheses**. A Bayesian might also assign different **priors** to each possible value of $\mu$, based on what we know about that distribution or the data-generating process.]:
+
+```{r}
+df_likelihood = data.frame(
+  mu = seq(from = -50, to = 50, length.out = 101)
+)
+```
+
+Now, for each hypothesized value $\mu_i$, let's calculate the log likelihood of the observed data $X$.
+
+```{r}
+LL = function(mean, sd) {
+  # Calculate log likelihood for dataset X
+  sum(dnorm(x = X, mean = mean, sd = sd, log = TRUE))
+}
+
+# Apply log likelihood function for each hypothesized value of mu (and fix SD at 10).
+df_likelihood$ll <- mapply(LL, mean=df_likelihood$mu, sd = 10)
+
+# Plot resulting distribution
+df_likelihood %>%
+  ggplot(aes(x = mu,
+             y = ll)) +
+  geom_point() +
+  theme_minimal()
+
+```
+
+And of course, if were trying to run this through an optimization algorithm, we'd want the **negative log likelihood** instead:
+
+```{r}
+df_likelihood %>%
+  ggplot(aes(x = mu,
+             y = -ll)) +
+  geom_point() +
+  theme_minimal()
+
+```
+
+But either way, what's clear is that the *best* log likelihood value is obtained when $\mu = 0$ (or at least is close to `0`). 
+
+This is good news! Remember that our original distribution was generated with $\mu = 0$. Thus, it makes sense that the data generated from that distribution would be most *likely* under a model with similar parameter values. 
+
+We can thus use this approach to find the best set of parameters $\theta$ for a given dataset $X$.
+
+
+#### Discrete distributions
+
+Now, we could also apply this same logic to discrete distributions, such as the **binomial distribution**. 
+
+Imagine we have a coin, and we want to identify the probability $p$ of tossing a heads. Before, we wanted to identify the parameters that comprise the normal distribution ($\mu$ and $\sigma$); now, we want to identify $p$.
+
+Now we observe 20 *independent* tosses of the coin. Of those 20 tosses, 14 come up heads. What is the best estimate for $p(H)$?
+
+Again, we can calculate the *likelihood* of observing that outcome for various values of $p$. But this is dealing with **binomial** data, not normally distributed data; so instead of using `dnorm`, we'll use `dbinom`.
+
+
+```{r}
+DATA = 14 ## 14 observed heads
+NUM_EVENTS = 20 ## 20 tosses
+df_probs = data.frame(
+  p = seq(0, 1, .01)) ## Various hypotheses for p(H)
+df_probs = df_probs %>%
+  mutate(likelihood = dbinom(DATA , size=NUM_EVENTS, prob=p)) 
+
+df_probs %>%
+  ggplot(aes(x = p,
+             y = likelihood)) +
+  geom_point() +
+  theme_minimal()
+
+```
+
+We see that the highest likelihood is assigned to a value of $p$ somewhere around `0.7` (note that this is of course what you'd get if you simply divided the number of heads, `14`, by the number of tosses, `20`). If this were a Bayesian analysis, we might multiply each of these likelihoods by a **prior** probability assigned to that hypothesized value of $p$---i.e., maybe we're extremely confident *a priori* that this is an unbiased coin. But based on the data alone, we should assign the highest likelihood to $p = 0.7$.
+
+
+### Likelihoods for statistical models
+
+Hopefully, the above sections were a useful refresher on calculating the probability of some set of *observations*, given some assumptions about the *distribution* that generated those observations. 
+
+Think of a statistical model as a generalization of the simpler distributions we were just working with. Each statistical model is itself **generative**: the parameters of that model, when applied to some dataset $X$, entail certain predictions, $\hat{Y}$. Or, put another way: a model's parameters entail certain *probabilities* for the possible values that $Y$ could take on!
+
+For example, let's say we want to predict the value of some continuous-valued outcome variable, e.g., **height**. One of the simplest ways to make predictions about that outcome would be to assume it's normally distributed, and then estimate the **mean** of that distribution. This is the approach we took above. Of course, such an approach won't give us very much **leverage** in terms of predictions, but if we have limited information, it can be a good first step. Below, I first simulate a normal distribution with parameters $\mu = 60, \sigma = 10$, then visualize that distribution on top of a single prediction: the mean of that distribution.
+
+```{r}
+set.seed(1)
+df_height = data.frame(
+  height = rnorm(n = 100, mean = 60, sd = 10)
+)
+
+df_height$pred_mean = 60
+df_height %>%
+  ggplot(aes(x = pred_mean,
+             y = height)) +
+  geom_point() +
+  theme_minimal()
+```
+
+This approach won't get us too far. That's because our predictions are conditioned only a single variable: the mean, $\mu$, of the target distribution in question.
+
+But let's assume we know something else about our data---i.e., we don't just know the *heights* of each individual, we also know their *mother's height*. If those two variables are related, it will give us more **leverage** in predicting `height`. Let's assume that the two variables are indeed related:
+
+```{r}
+df_height$m_height = rnorm(n=100, df_height$height, sd = 10) 
+
+df_height %>%
+  ggplot(aes(x = m_height,
+             y = height)) +
+  geom_point() +
+  labs(x = "Mother's height",
+       y = "Child's height") +
+  theme_minimal()
+```
+
+Now, we can estimate additional **parameters**. Our predictions $\hat{Y}$ won't just be set to the mean of $Y$, i.e., $\mu$. 
+
+Rather, our value for $\mu$ will be **conditioned** on the values of $X$---specifically, each prediction $\hat{Y_i}$ will be determined from the value $X_i$ and a **slope coefficient** relating $X$ to $Y$. And similarly, our value for $\sigma$ will be based on our **average prediction error** (aka the **residual standard error**).
+
+Let's fit a linear model to this data:
+
+```{r}
+m = lm(data = df_height,
+       height ~ m_height)
+m$coefficients
+```
+
+We can use this model to generate predictions, $\hat{Y}$.
+
+```{r}
+df_height$y_pred = predict(m)
+
+df_height %>%
+  ggplot(aes(x = m_height,
+             y = height)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "Mother's height",
+       y = "Actual height") +
+  theme_minimal()
+
+rss = sum((df_height$y_pred - df_height$height)**2)
+rse = sqrt(rss / (nrow(df_height) - 2))
+rse
+```
+
+
+Our predictions aren't perfect, of course. On average, we can expect a prediction error of about `r round(rse, 2)`.
+
+How would we evaluate the *likelihood* of this model? Well, as noted above, we can think of each predicted value $\hat{Y}_i$ as representing the **mean** of a normal distribution, conditioned on a particular value $X_i$; we assume that $\sigma$ is constant across values of $X$ ^[Interestingly, this is why **homoscedasticity** is such a critical assumption of linear regression].
+
+Thus, for each *actual* value $Y_i$, we can calculate the *probability* of that value occurring under a normal distribution with parameters $\mu_i, \sigma$, where $\mu_i = \beta_1 * X_i + \beta_0$. Put together, this gives us the likelihood function:
+
+$\mathcal{L}(Y|\theta) = \sum\limits_{i=1}^N log(p(Y_i | \theta))$
+
+Where $\theta$, in this case, is $\beta_0, \beta_1$. Thus, $p(Y_i | \theta)$ is akin to asking, for some value of $X_i$:
+
+$p(Y_i) | \beta_0, \beta_1) = p(Y_i | Normal(\mu=\beta_0 + X_i\beta_1, \sigma=RSE))$
+
+I.e., what's the probability of getting some value $Y_i$ from a normal distribution parameterized by the predicted value $\hat{Y}_i$ and residual standard error (RSE)? That's exactly what the code below calculates:
+
+```{r}
+ll = sum(dnorm(x = df_height$height, 
+               mean = df_height$y_pred, 
+               sd = rse, 
+               log = TRUE))
+ll
+```
+
+We can double-check this using the `logLik` function in R:
+
+```{r}
+logLik(m)
+```
+
+#### Zooming in
+
+If the above explanation doesn't make sense, we can also try to illustrate what's going on graphically. 
+
+Below, I'll visualize some of the points from the above graph again, but only select a random subset of them (for ease of visualization). Along with the *actual* observations (shown in *blue*), I show the *predicted* values $\hat{Y}$ (in *red*), which are arranged along the **line of best fit**. I also show the *residuals* (the dotted red lines), i.e., the difference between each actual observation and the predicted value. 
+
+And most crucially, I'll also draw a normal distribution around the predicted value $\hat{Y}_i$, and hopefully that gives intuition for this likelihood calculation: the further each actual value (the blue dots) is from the center of the corresponding normal distribution, the **less likely that data point is under the model**. All credit for the normal distribution visualizations goes to [this answer on StackOverflow](https://stackoverflow.com/questions/62551795/make-ggplot-with-regression-line-and-normal-distribution-overlay). 
+
+Note that the *width* of each normal distribution is determined by the the residual standard error ^[Again, error is assumed to be constant across the regression line. This assumption is called homoscedasticity.]. The likelihood calculation then asks: what's the probability of the **blue point** (i.e., the actual data) occurring under that normal distribution?
+
+```{r}
+set.seed(1)
+df_sub_sample = df_height %>%
+  sample_n(10) %>%
+  filter(m_height < 60)
+
+
+# For every row in `df`, compute a rotated normal density centered at `y` and shifted by `x`
+curves <- lapply(seq_len(nrow(df_sub_sample)), function(i) {
+  mu <- df_sub_sample$y_pred[i]
+  range <- mu + c(-rse, rse)
+  seq <- seq(range[1], range[2], length.out = 100)
+  data.frame(
+    x = -1 * dnorm(seq, mean = mu) + df_sub_sample$m_height[i],
+    y = seq,
+    grp = i
+  )
+})
+
+# Combine above densities in one data.frame
+curves <- do.call(rbind, curves)
+
+
+df_sub_sample$x = df_sub_sample$m_height
+df_sub_sample$y = df_sub_sample$height
+
+ggplot(df_sub_sample, aes(x, y)) +
+  geom_point(size = 3, alpha = .6, color = "blue") +
+  # geom_point(aes(x = m_height, y = height), ) +
+  geom_point(aes(x = m_height, y = y_pred), size = 3, alpha = .4, color = "red") +
+  # The path draws the curve
+  geom_path(data = curves, aes(group = grp))  +
+  geom_polygon(data = curves, aes(y = scales::oob_squish(y, c(0, Inf)),group = grp)) +
+  geom_abline(slope = m$coefficients["m_height"],
+            intercept =m$coefficients["(Intercept)"],
+            color = "red",
+            alpha = .6) +
+  geom_segment(aes(xend = m_height, yend = y_pred), color = "red", linetype = "dotted") +
+  labs(x = "Mother's height",
+       y = "Child's height") +
+  theme_minimal()
+
+```
+
+
+
+## Conducting a likelihood ratio test
+
+Now that we know what log likelihood is, and (more or less) how to calculate it, we can finally apply this knowledge to our first model comparison technique: the **likelihood ratio test**, or **LRT**. 
+
+The basic intuition of a likelihood ratio test here is as follows: given a choice between two models, $M_1$ and $M_2$, we should prefer the model that best accounts for some set of data $D$. In particular, a LRT is typically used to select between two **nested models**, i.e., where one model ($M_{k-1}$) is considered a "special case" of a larger model ($M_k$); here, $k$ refers to the number of parameters. I'll be focusing on the comparison of nested models specifically, though see Lewis (2011) for a discussion of how to compare two non-nested models with a likelihood ratio test.
+
+### Formal description and walkthrough
+
+Intuitively, the **likelihood ratio** is a fraction expressing how much more likely the data are under one model vs. another model. Let's first define this ratio term:
+
+$\lambda = \frac{\mathcal{L}(M_{k-1})}{\mathcal{L}(M_{k})}$
+
+Because $M_{k-1}$ is **nested** within $M_{k}$ (i.e., $M_{K}$ has all the parameters that $M_{k-1}$ has, plus at least one), its likelihood should never be any larger than $M_{k}$. That means that the ratio $\lambda$ should be bound between $(0, 1)$. 
+
+What would various values of $\lambda$ tell us about the relative likelihoods about the models? Conceptually, **larger** values of $\lambda$ (closer to $1$) tells us that $\mathcal{L}(M_{k-1})$ isn't much less likely than $\mathcal{L}(M_{k})$; in other words, the "full" model isn't much better than the reduced, "special case" model^[Note that one could also define the ratio with the full model in the numerator, and the reduced model in the denominator. The main thing this will change down the line is whether we multiply the ratio by `-2` or just `2`.]. If $\lambda$ is very closer to $0$, it suggests that the full model is a big improvement over the reduced model (i.e., the data are many times many "likely" under this full model).
+
+To calculate the full **likelihood ratio** (let's call this $\Delta$), there's just a few more steps:
+
+$\Delta = -2 *log(\frac{\mathcal{L}(M_{k-1})}{\mathcal{L}(M_{k})})$
+
+Let's unpack this formula a bit. Above, we've already seen that a smaller ratio between the likelihoods indicates a greater improvement of the full model over the reduced, "special case" model. Correspondingly, the `log` of this ratio should be **larger** (i.e., more negative) when the full model represents a larger improvement. 
+
+We can visualize that below. First, let's set up a vector of possible values of $\lambda$, bounded between $(0, 1)$.
+
+```{r}
+lambdas = seq(.01, 1, by=.001)
+```
+
+We then take the *log* of these $\lambda$ values:
+
+```{r}
+log_lambdas = log(lambdas)
+```
+
+And finally, we calculate the values of $\Delta$:
+
+```{r}
+ll_ratio = -2 * log_lambdas
+df_loglik_example = data.frame(lambdas = lambdas,
+                               log_lambdas = log_lambdas,
+                               lr = ll_ratio)
+
+```
+
+As you'd expect, *larger* lambdas (closer to $1$) yield values of $log(\lambda)$ closer to $0$ (a smaller absolute value). 
+
+```{r}
+df_loglik_example %>%
+  ggplot(aes(x = lambdas,
+             y = log_lambdas)) +
+  geom_point() +
+  labs(x = "Lambda",
+       y = "Log(lambda)") +
+  theme_minimal()
+```
+
+Ultimately, *larger* lambdas also correspond to *smaller* likelihood ratios $\Delta$.
+
+```{r}
+df_loglik_example %>%
+  ggplot(aes(x = lambdas,
+             y = lr)) +
+  geom_point() +
+  labs(x = "Lambda",
+       y = "-2 * Log(lambda)") +
+  theme_minimal()
+
+```
+
+So there we have it: **The better a full model is than a smaller, "special case" model, the larger the likelihood ratio between those models will be**.
+
+Quick note: recall that during Maximum Likelihood Estimation (MLE), we typically calculate the log likelihood, rather than the raw likelihood. This means we can express the above formula in the following way:
+
+$\Delta = -2 * (log(\mathcal{L}(M_{k-1})) - log(\mathcal{L}(M_{k})))$
+
+It's the same formula, but the **log likelihood** values are the values we typically optimize over (or technically, the **negative log likelihood**).
+
+
+### Hypothesis testing
+
+So what do we *do* with this LRT? Many scientists use the paradigm of Null Hypothesis Significance Testing (NHST). With more traditional tests, this involves comparing some critical test statistic (e.g., an F-ratio) to a **sampling distribution** representing the null hypothesis. If that test statistic is sufficiently unlikely to occur under that sampling distribution (typically $p < .05$), we *reject* the null hypothesis. Put another way: if the data are not very likely under the null hypothesis, we reject the null as the best explanation of the data.
+
+There are a number of critiques of NHST and, of course, its reliance on **p-values** ([Wagenmakers, 2007](https://link.springer.com/article/10.3758/BF03194105), [McShane et al, 2019](https://amstat.tandfonline.com/doi/pdf/10.1080/00031305.2018.1527253)), but this is not a tutorial about the relative merits of NHST vs. Bayesian methods. Given that you're reading this section, you probably want to know: how do I *use* a likelihood ratio test? That is, how do I tell whether the full model is *significantly* better than the reduced model?
+
+It turns out to be pretty similar to evaluating the significance of an F-ratio or t-statistic. In fact, [Wilks' theorem](https://en.wikipedia.org/wiki/Wilks%27_theorem) states: **As the sample increases, the distribution of the test statistic $\delta$ approaches the [chi-squared distribution](https://en.wikipedia.org/wiki/Chi-squared_distribution) parameterized by the difference in degrees of freedom between the models.** 
+
+The chi-squared ($\chi^2$) distribution is well-understood, and is of course used to calculate the *p-value* for chi-squared tests. That means that all we have to do is look up our log-likelihood ratio ($\delta$) in the appropriate chi-squared distribution. Here, "appropriate" means the distribution with the correct degrees of freedom---and that corresponds, essentially, to the difference in number of parameters between the full model and the reduced model.
+
+To help illustrate this, let's consider several different chi-squared distributions with different degrees of freedom:
 
 ```{r}
 df_chi = data.frame(
   "df 1" = rchisq(1000, 1),
-  # "df 2" = rchisq(1000, 2),
-  # "df 3" = rchisq(1000, 3),
-  # "df 4" = rchisq(1000, 4),
-  "df 5" = rchisq(1000, 5)
+  "df 5" = rchisq(1000, 5),
+  "df 8" = rchisq(1000, 8)
 ) %>%
-  gather()
-
-df_chi$DF = df_chi$key
+  pivot_longer(cols = c("df.1", "df.5", "df.8"),
+               names_to = "df",
+               values_to = "chi")
 
 df_chi %>%
-  ggplot(aes(x = value,
-             fill = DF)) +
+  ggplot(aes(x = chi,
+             fill = df)) +
   geom_density(alpha = .4) +
+  geom_vline(xintercept = 4, linetype = "dotted") +
   labs(title = "Null chi-squared distributions for varying DF",
        x = "Chi-squared statistic") +
   theme_minimal()
 
 ```
 
-Assuming that each of our simulated model comparisons earlier differed only in one parameter, we can obtain p-values for each of the $LR$ values by looking up that value in the corresponding chi-squared distribution. Below is a visualization of the **p-values** for a set of **log likelihood ratios** (the dotted line represents the typical $p < .05$ significance threshold): 
+Hopefully, this plot helps illustrate an important point: the **degrees of freedom (df)** is a really important parameter for determining the shape of the null distribution! Distributions with fewer degrees of freedom (like $df = 1$) tend to have relatively smaller chi-squared values than distributions with more degrees of freedom (like $df = 8$). Since NHST works by looking up a given test statistic in a null distribution, this means that the same test statistic will be *differentially likely* (i.e., have a different p-value) under different distributions. 
+
+For example, the dotted line is located at $\chi^2 = 4$. This is relatively more likely when $df = 1$ (p = `r round(pchisq(4, df = 1, lower.tail = FALSE), 3)`) than when $df = 8$ (p = `r round(pchisq(4, df = 8, lower.tail = FALSE), 3)`).
+
+Just to illustrate this further, let's calculate the p-value for each of the log-likelihood ratios we simulated earlier, assuming a $df = 1$:
 
 ```{r}
 # Obtain p-value by looking up actual value in a chi-squared distribution, where DF = 1
-df_loglik_example$p1 = 1 - pchisq(df_loglik_example$ll, 1)
+df_loglik_example$p1 = 1 - pchisq(df_loglik_example$lr, 1)
 
 df_loglik_example %>%
-  ggplot(aes(x = ll,
+  ggplot(aes(x = lr,
              y = p1)) + 
   geom_point() +
   labs(title = "P-values of different log-likelihood ratios (DF = 1)",
-       x = "Likelihood ratio (LR)",
+       x = "Log likelihood ratio (LR)",
        y = "p-value (assuming DF=1)") +
   geom_hline(yintercept = .05, linetype = "dotted") +
   theme_minimal()
 ```
 
-As you'd expect, the p-values get smaller (more significant) as our likelihood ratio increases. On top of this plot, we can also look at the distribution of p-values for the **same likelihood ratios**, but with different degrees of freedom; the black line corresponds to $DF = 1$, and the red line corresponds to $DF = 2$: 
+
+We see that as the log-likelihood ratio increases, the p-value decreases. In other words, the probability of obtaining a log likelihood ratio that large is less and less likely under the null distribution. 
+
+The same would be true with a larger value for $df$ (e.g., $df = 3$), but our critical threshold would be higher:
 
 ```{r}
-df_loglik_example$p2 = 1 - pchisq(df_loglik_example$ll, 2)
+# Obtain p-value by looking up actual value in a chi-squared distribution, where DF = 3
+df_loglik_example$p3 = 1 - pchisq(df_loglik_example$lr, 3)
 
 df_loglik_example %>%
-  ggplot(aes(x = ll,
-             y = p1)) + 
+  ggplot(aes(x = lr,
+             y = p3)) + 
   geom_point() +
-  geom_point(aes(x = ll, y = p2), color = "red") +
-  labs(title = "P-values of different log-likelihood ratios (DF = 1, 2)",
-       x = "Likelihood ratio (LR)",
-       y = "p-value") +
+  labs(title = "P-values of different log-likelihood ratios (DF = 3)",
+       x = "Log likelihood ratio (LR)",
+       y = "p-value (assuming DF = 3)") +
   geom_hline(yintercept = .05, linetype = "dotted") +
   theme_minimal()
 ```
 
-Importantly, the same $LR$ value is associated with a different p-value as a function of the $DF$.
+
+## Example 1: Simple linear regression
+
+Remember that distribution of **heights** we simulated earlier? 
+
+```{r}
+df_height %>%
+  ggplot(aes(x = m_height,
+             y = height)) +
+  geom_point() +
+  labs(x = "Mother's height",
+       y = "Child's height") +
+  theme_minimal()
+```
+
+Recall that we built a model predicting `child's height` from `mother's height` (let's just rebuild this here to refresh our memory):
+
+```{r}
+m = lm(data = df_height,
+       height ~ m_height)
+```
+
+We also calculated the log-likelihood of this model:
+
+```{r}
+logLik(m)[1]
+```
+
+Now let's say we want to compare this model to some *reduced* model. For example, what if we just included a freely varying intercept and no other parameters? Let's build that model below, and calculate its log-likelihood.
+
+```{r}
+m2 = lm(data = df_height,
+        height ~ 1)
+
+logLik(m2)[1]
+```
+
+As expected, the log likelihood of the full model is lower than that of the reduced model. But how much lower? Let's calculate the *log likelihood ratio*:
+
+$\Delta = -2 * (log(\mathcal{L}(M_{k-1})) - log(\mathcal{L}(M_{k})))$
+
+```{r}
+delta = -2 * (logLik(m2)[1] - logLik(m)[1])
+delta
+```
+
+Recall that our models also differ in one degree of freedom. The full model contains a freely varying intercept, and a freely varying slope coefficient for the `mother's height` variable; the reduced model only contains only a freely varying intercept. 
+
+So we can calculate the p-value for this $\delta$ value by looking it up in a chi-squared distribution with the appropriate degrees of freedom ($df = 1$):
+
+```{r}
+pchisq(delta, 1, lower.tail = FALSE)
+```
+
+That's a very low p-value! This means that we're very likely to have achieved a value this large under the null distribution. We can double-check our work using the `lrtest` function:
+
+```{r}
+lrtest(m, m2)
+```
+
+
+## Example 2: Linear mixed effects models
+
+Log likelihood ratio tests are, as far as I know, the standard approach to evaluating mixed (i.e., multilevel) models. Let's run through a really quick example; for more details, see my [mixed models in R](https://seantrott.github.io/mixed_models_R/) tutorial for more details, which has more information.
+
+The `sleepstudy` dataset has information about the average reaction time for participants given different degrees of sleep deprivation. There are multiple responses per subject, which means we probably want to add at least a random intercept for each subject---and possibly a **random slope** for the effect of `Days` of sleep deprivation on `RT`.
+
+Let's build our two models below:
+
+```{r}
+model_full = lmer(data = sleepstudy,
+                  Reaction ~ Days + (1 + Days | Subject),
+                  REML = FALSE)
+
+model_reduced = lmer(data = sleepstudy,
+                  Reaction ~ (1 + Days | Subject),
+                  REML = FALSE)
+```
+
+Note that the full model contains a fixed effect of `Days`, as well as by-subject random slopes for the effect of `Days`, and random intercepts for `Subject`. The reduced model omits only the fixed effect of `Days`, meaning the two models differ only in one parameter.
+
+We can use the handy `anova` function to conduct a log likelihood ratio test:
+
+```{r}
+anova(model_full, model_reduced)
+```
+
+If you want to report such a result, I'd go with something like: "A fixed effect of `Days` significantly improved model fit [$\chi^2(1) = 23.53, p < .001$] above and beyond a model omitting this effect."
+
+
+# Akaike Information Criterion (AIC)
+
+Another common model evaluation (and comparison) approach is the [Akaike Information Criterion](https://en.wikipedia.org/wiki/Akaike_information_criterion), or AIC (Akaike, 1974). The formula is as follows:
+
+$AIC = 2k - 2ln(L)$
+
+Where $k$ is the number of parameters, and $\mathcal{L}$ is the likelihood of the model. Don't worry if this doesn't seem intuitive yet---the sections below will explore the philosophy and implications of this formula.
+
+## Philosophy of AIC
+
+**Disclaimer**: I'm by no means an expert in information theory and certainly not these information-theoretic methods (or their relationship to likelihood ratio tests). Anything you see below was adapted from papers I read to understand the topic: Burnham & Anderson (2002), Burnham & Anderson (2004), and Lewis et al (2011). 
+
+Furthermore, this background may not be strictly *necessary* for using AIC. But if you only want to read one thing, I recommend this 2002 paper, which is a high-level overview of common pitfalls people make when calculating AIC:
+
+> Anderson, D. R., & Burnham, K. P. (2002). Avoiding pitfalls when using information-theoretic methods. The Journal of Wildlife Management, 912-918.
+
+
+### NHST vs. strength of evidence
+
+One important difference between the log-likelihood ratio test (at least in terms of its NHST manifestation) and AIC lies in their underlying philosophies. As Burnham and Anderson (2002) note, AIC and other information-theoretic approaches are not "tests"; although one can *rank* models according to their AIC, there is no assumption that the relative differences or ratios in their AIC values is associated with some known distribution. 
+
+Thus, unlike a log-likelihood ratio test, there is no focus on rejecting a "null hypothesis"---rather, the idea is to compare among multiple, plausible models of the data, and select either the model (or models) on the basis of **strength of evidence**. In this sense, AIC (and BIC) are not inherently tied to some decision rule, whereas NHST is explicitly about decision thresholds---though standard statistical tests, such as t-tests, can in fact be replicated using AIC values.
+
+### KL-Divergence
+
+That said, there is a deep relationship between the log-likelihood ratio and AIC. 
+
+AIC (Akaike, 1974) is rooted in the notion of [Kullback-Leibler Divergence](https://en.wikipedia.org/wiki/Kullback%E2%80%93Leibler_divergence), or KL-D. KL-D (or KL-information) is a measure of the degree to which one probability distribution differs from one another---it is formally operationalized as the difference in number of "bits" required for encoding some probability distribution $f$ using some model/theory $g$ as opposed to using $f$. Put another way, KL information (or $I(f, g)$) is the information *lost* when some model $g$ is used to approximate $f$, or "true reality" (Burnham & Anderson, 2004). 
+
+One might intuit why such a measure would be useful for evaluating models: **ideally, we want the model that loses the least amount of information about "reality" relative to other models under consideration**. But we obviously don't have access to "true reality"; so as Burnham et al (2011) point out, rather than calculating the divergence between each model in a set of candidate models, we can calculate the divergence between each model and the **best model** in that set.
+
+KL-information is expressed as follows:
+
+$I(f, g) =\int f(x)log(f(x))dx - \int f(x)log(g(x|\theta))dx$
+
+As Burnham & Anderson (2004) write, this can also be expressed as:
+
+$I(f, g) = E_{f}[log(f(x))] - E_{f}[log(g(x|\theta))]$
+
+Where the expectation $E$ is taken with respect to $f(x)$, "the truth". Critically, the value $E_{f}[log(f(x))]$ is constant across all the different models we might be comparing, since it depends solely on the truth---i.e., it doesn't change, and can be represented as some constant $C$. This means that to *compare* models, we really only need to calculate $E_{f}[log(g(x|\theta))]$. 
+
+Akaike's (1974) insight was that this term $E_{f}[log(g(x|\theta))]$ could be estimated---albeit with some **bias**---using the maximum likelihood value. And it turns out that this bias is approximately equal to the number of parameters ($K$) in the model. 
+
+This last bit is explored further below, but the point of this section is to drive home the connection between the underlying philosophy of AIC and model likelihood. Akaike's goal was to find some "metric" that would capture the degree of information lost across different models about the data. His starting point was KL-Divergence, but he ended up converging on **model likelihood** as a biased approximation of this relative information loss. 
+
+## Walking through the formula
+
+Where does this formula come from? To start, recall that Akaike demonstrated the following equivalence:
+
+$\hat{E}(KL) = log(L) - K$
+
+This states that the relative information loss is equal to the log likelihood of a model, minus the number of parameters ($K$). According to Burnham & Anderson (2004), Akaike then multiplied this result by $-2$ "for historical reasons", giving us the final value:
+
+$AIC = -2*log(L) + 2k = 2k - 2*log(L)$
+
+Using this definition, a **lower AIC** is "better". Recall that *smaller* negative log-likelihood values are better, and the formula is essentially calculating the negative log-likelihood ($-2 * log(L)$). To get a better sense of how exactly AIC, likelihood, and number of parameters relate, let's simulate some "models" with varying likelihoods and number of parameters.
+
+```{r}
+## Possible likelihood values
+l = seq(.1, .99, length.out = 50)
+## Possible number of parameters
+k = seq(1, 100, length.out = 25)
+
+## Expand into a "grid", with each row corresponding to a particular model.
+df_models = expand.grid(likelihood = l, 
+                        parameters = k)
+
+## Formula to calculate AIC
+aic_og = function(l, k) {
+  aic = 2*k - 2*log(l)
+  aic
+}
+
+## Calculate AIC
+df_models = df_models%>%
+  mutate(aic = aic_og(likelihood, parameters))
+```
+
+Okay, now let's plot $AIC$ by $Likelihood$, and color each dot according to the number of $parameters$.
+
+```{r}
+df_models %>%
+  ggplot(aes(x = likelihood,
+             y = aic,
+             color = parameters)) +
+  geom_point(alpha = .8) +
+  theme_minimal()
+```
+
+What's the takeaway from this graph?
+
+First, models with larger *likelihood* values have *lower* AICs in general. In other words, the more likely the data are under a particular model, the lower that model's AIC value. This drives home the point from above: a lower AIC corresponds to a "better" model.
+
+Second, models with more parameters (the lighter dots) have *larger* AIC values than models with fewer parameters (the darker dots), on average. This is because of the bias correction term, $2K$. Intuitively, adding more parameters to a model will increase the size of this term, yielding a larger AIC. So two models with the *same* likelihood but different numbers of parameters will have different AIC values. 
+
+This latter point can also be illustrated more directly by just plotting $AIC$ by $parameters$:
+
+```{r}
+df_models %>%
+  ggplot(aes(x = parameters,
+             y = aic)) +
+  geom_point(alpha = .5) +
+  theme_minimal()
+```
+
+
+### Correction for small samples
+
+Note that if the number of parameters ($K$) is quite large relative to the sample size ($n$), there is a "small-sample" version of AIC called $AIC_c$. This looks essentially like the formula above, but adds another term:
+
+$AIC = AIC + \frac{2K(K + 1)}{n - K - 1}$
+
+What exactly does this additional "correction" term do? The basic idea is that it adds a correction that's scaled to the relative difference btween the number of parameters and the number of observations.
+
+If $n$ is much larger than $K$, then the additional term will result in a smaller ratio---thus adding less to the ultimate AIC calculation; as $n \to \infty$, this term approaches $0$. Conversely, as $K \to n$, this correction term gets larger and larger.
+
+Just to illustrate exactly how this works, I'll plot out various values of $n$, $K$, and the resulting correction.
+
+```{r}
+n = seq(100, 1000, length.out = 10)
+k = seq(1, 10, length.out = 10)
+
+df_example = expand.grid(n=n, k=k)
+df_example = df_example %>%
+  mutate(correction = (2 * k**2 + 2*k) / (n - k - 1))
+
+df_example %>%
+  ggplot(aes(x = n,
+             y = k,
+             size = correction)) +
+  geom_point() +
+  theme_minimal()
+```
+
+This plot illustrates a couple key insights:
+
+1. Larger values of $n$ correspond to smaller "corrections".  
+2. Larger values of $K$ correspond to larger corrections.
+
+Thus, the largest corrections are in the upper left (small $n$, large $K$), and the smallest corrections are in the bottom right (big $n$, small $K$). 
+
+**Important Note**: If the model is too "saturated" (i.e., if $K = n - 1$, or even $K = n$), this correction will yield nonsensical results. For example, in the case where $K = n - 1$, the correction term involves division by $0$; in the case where $K = n$, the denominator ends up negative, which would appear to **favor** models with the same number of parameters as data points. This is obviously wrong, as the case where $K = n$ is a prime example of overfitting; any model can achieve perfect fit if there are as many parameters as data points. 
+
+Okay, now let's see how this additional penalty impacts AIC. We've already seen that models with larger likelihoods have smaller AIC values (holding $K$ constant), and also that models with more parameters have larger AIC values (holding likelihood constant). How does accounting for our sample size ($n$) impact our value for $AIC_c$? And how does this compare to the more "vanilla" AIC calculation?
+
+First, let's simulate some model parameters.
+
+```{r}
+## Possible likelihood values
+l = seq(.1, .99, length.out = 20)
+## Sample sizes
+n = seq(20, 400, length.out = 20)
+## Number of parameters
+k = seq(1, 10, length.out = 20)
+
+## Extended AIC
+aic_c = function(l, k, n) {
+  aic = 2*k - 2*log(l) + (2*k * (k + 1)) / (n - k - 1)
+  aic
+}
+
+## Create grid of models
+df_models = expand.grid(n=n,
+                        k=k,
+                        likelihood = l)
+## Calculate AIC
+df_models = df_models %>%
+  mutate(aic1 = aic_og(likelihood, k),
+         aic2 = aic_c(likelihood, k, n))
+
+```
+
+Now let's compare the "vanilla" $AIC$ to $AIC_c$:
+
+```{r}
+df_models %>%
+  ggplot(aes(x = aic1,
+             y = aic2,
+             color = k)) +
+  geom_abline(aes(slope = 1, intercept = 0), 
+              linetype = "dotted") +
+  geom_point(alpha = .5) +
+  labs(x = "AIC",
+       y = "AIC (corrected)") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0, max(df_models$aic2))) +
+  scale_y_continuous(limits = c(0, max(df_models$aic2))) +
+  facet_wrap(~n)
+
+```
+
+The dotted line represents $Y = X$. So points that lie along that dotted line have roughly the same value for $AIC_c$ as $AIC$. In contrast, points that lie **above** the line have larger values for $AIC_c$---this indicates that they received relatively harsher penalties in the correction term.
+
+Looking closely at the graph, we see that the largest deviations from the line of parity are for the smallest sample sizes (e.g., $n = 20$). This makes sense, given what we described earlier: as $K \to n$, the value $\frac{2K(K + 1)}{n - K - 1}$ gets larger and larger, and thus $AIC_c$ gets a larger penalty.
+
+### When should you use corrected AIC?
+
+Burnham and Anderson (2004) suggest that you should use the corrected term $AIC_c$ *unless* $\frac{n}{K} > 40$, i.e., you have roughly 40x as many data points as parameters. So if you have 60 observations and 20 model parameters, you'll probably want to go with $AIC_c$. Whereas if you have more than, say, 1000 observations---and still just have 20 parameters at the most---then you might be okay using $AIC$. 
+
+But as we've seen above, the penalty term ends up approaching $0$ as $n \to \infty$, which from my perspective, suggests that using $AIC_c$ is usually a safe bet!
+
+##  Comparing AIC values
+
+Ultimately, we want to *evaluate* the strength of evidence for each model in our set of candidates $M = {m_1, m_2, ..., m_n}$, allowing us to *select* the model that best explains some dataset $D$. How do we do this?
+
+We've already established that a lower AIC reflects better model fit. And unlike with log-likelihood ratio tests, the calculation for AIC explicitly incorporates the number of parameters, so we don't have to worry about adding a further penalty for each models' respective degrees of freedom. From one perspective, this makes model comparison quite straightforward: we can just **rank** each model from best (lowest AIC) to worst (highest AIC). The "best" model is the one that minimizes K-L information loss (Burnham et al, 2011). 
+
+### AIC Delta
+
+Note, however, that the **absolute value** of AIC doesn't really matter, as it'll be a function of the model likelihood, which of course depends on properties of the data and the model itself. What really matters if the **relative value** of AIC across our models. Thus, to better evaluate models, people sometimes **rescale** $AIC$ according to the minimum AIC value, $AIC_{min}$:
+
+$\Delta_i = AIC_i - AIC_{min}$
+
+This means that the best model will have its $\Delta = 0$, while the other models will all have positive values. Each successive value of $\Delta_i$ will reflect how much "worse" (in units of $AIC$) a given model is from the very best model. As noted earlier, the philosophical motivation for this is rooted in the notion of Kullback-Leibler information. Ideally, we want to minimize the information loss between *reality* and our model. Since we don't have access to reality, we instead compare each model to the *best* model; see *Figure 1* in Burnham et al (2011) for a really helpful illustration of this.
+
+So for example, if our AIC values were as follows:
+
+```{r}
+models = seq(1000, 1010, by = 2)
+models
+```
+
+We would rescale them in the following way:
+
+```{r}
+models_rescaled = models - min(models)
+models_rescaled
+```
+
+
+### Relative likelihood
+
+This means that we can quantify the **relative likelihood** of each model in relation to the best model (Burnham et al, 2011). Note, here, that "likelihood" is now being used to refer to a different quantity than what we called likelihood earlier. That is, we now want to calculate $\ell = \mathcal{L}(m_i | D)$, i.e., the likelihood of a model, given the data; earlier, we calculated $\mathcal{L}(D | m_i)$, the probability of the data, given the model. We can calculate the **relative likelihood** by simply exponentiating the $\Delta_i$ value:
+
+$\ell_i = \mathcal{L}(m_i | D) = exp(-\frac{1}{2}\Delta_i)$
+
+By comparing two values $\ell_i, \ell_j$, we can quantify the relative likelihood of model $m_i$ and model $m_j$ (i.e., "Model 3 is 20 times more likely than model 4"). 
+
+Let's calculcate $\ell_i$ for each of our rescaled models:
+
+```{r}
+L = exp(-(1/2) * models_rescaled)
+L
+```
+
+This also allows us to calculate the **relative probability** of each model, given the data and our set of candidate models $M$, by normalizing each likelihood value:
+
+$p(m_i | D) = \frac{\ell_i}{\sum\limits_{j=1}^M\ell_j}$
+
+Where $M$ is our total set of candidate models. Below, I calculate $p(m_i | D)$ for each of the likelihood values simulated above.
+
+```{r}
+p = L / sum(L)
+p
+```
+
+These probabilities are sometimes called **Akaike weights**, for reasons described in the "Multimodel Inference" section below.
+
+Finally, using either the *relative likelihoods* or the *relative probabilities* of each model, we can calculate something called the **evidence ratio**:
+
+```{r}
+L[2] / L[3]
+p[2] / p[3]
+```
+
+This is sometimes interpreted as meaning the "empirical support" for one model is $X$ times stronger than another model, i.e., the empirical support for model $m_2$ is `r round(L[2] / L[3], 2)` stronger than model $m_3$. 
+
+In addition to comparing each model to each other, one can compare each model to the *best* model. The resulting evidence ratio reveals the degree to which the evidence is stronger for the *best* model relative to the model in question:
+
+```{r}
+ev = L[1] / L
+ev
+```
+
+## Final notes on AIC
+
+Hopefully this brief discussion of AIC helps illuminate the theoretical motivation, as well as what the different parameters (i.e., $\mathcal{L}$, $n$, and $K$) mean in terms of the ultimate value. As I noted earlier, I'm not an expert on information-theoretic methods for model comparison---much of what I know, I had to learn for this tutorial! The following papers were invaluable:
+
+- Anderson, D. R., & Burnham, K. P. (2002). Avoiding pitfalls when using information-theoretic methods. The Journal of Wildlife Management, 912-918.  
+- Burnham, K. P., & Anderson, D. R. (2004). Multimodel inference: understanding AIC and BIC in model selection. Sociological methods & research, 33(2), 261-304.  
+- Burnham, K. P., Anderson, D. R., & Huyvaert, K. P. (2011). AIC model selection and multimodel inference in behavioral ecology: some background, observations, and comparisons. Behavioral ecology and sociobiology, 65(1), 23-35.  
+
+### Common pitfalls 
+
+Burnham and Anderson (2002) list several common pitfalls people encounter when using information-theoretic methods, including AIC. I'll summarize just a few below:
+
+**Information-theoretic models are not a "test"**. I've described this above and below, but neither $AIC$ nor any of the calculations derived with it (e.g., the evidence ratio) have a theoretical justification for anything like a "significance test". 
+
+**Use of AIC instead of corrected AIC**. If the sample size is small relative to the number of parameters, one should use $AIC_c$ rather than $AIC$! See the simulation above for an illustration of how incorporating $n$ into the calculation penalizes $AIC_c$ (relative to "vanilla" $AIC$).
+
+**Incorrect estimation of number of parameters**. A common mistake with approaches like linear regression is to forget that the residuals are considered a parameter. So a linear model with an intercept $\beta_0$, a slope $\beta_1$, and some residual variance $\epsilon$ has $3$ parameters.
+
+**Comparing AIC across datasets**. This might go without saysing, but you can't compare information criteria across different datasets! Burnham and Anderson (2002) write (pg. 917):
+
+> The data must be considered fixed, and then models in the set can be compared and ranked.
+
+This is especially important if some of your predictors contain missing data, such that different models will actually be fit to different subsets of the dataset. Not all software packages alert you when certain rows of data are ignored or omitted from a model, so this is something to be aware of.
+
+Check out the paper for more advice!
+
+
+### Relationship to likelihood ratio tests
+
+The most obvious connection between AIC and likelihood ratio tests (LRT) is that AIC incorporates likelihood into its formula; thus, AIC clearly *depends on* likelihood. 
+
+Further, both LRTs and AIC account in some way for the number of parameters in a model. AIC does this explicitly, using the number of parameters $K$ for the final calculation. But LRTs also do this, in a way: as we saw earlier, the significance test for an LRT involves looking a given $\chi^2$ value in the chi-squared distribution with the appropriate degrees of freedom ($df$), where $df$ is defined as the *difference* in number of parameters between the full model and the reduced model. Thus, the *same* likelihood ratio will "mean" something different depending on the difference in number of parameters across the models.
+
+As Lewis et al (2011) point out, the connection is deeper than just a conceptual analogy. The difference in AIC between models $m_i$ and $m_j$ is equivalent to the likelihood ratio between those models, plus a term correcting for the difference in number of parameters:
+
+$AIC_i - AIC_j = Q + 2(K_i - K_j)$
+
+Where $Q$ is the likelihood ratio between $m_i$ and $m_j$, and $K_i$ and $K_j$ are the number of the parameters in each model, respectively^[I haven't actually worked through the algebra on this one, but I assume it's correct!]. 
+
+Of course, unlike LRTs, AIC is (as far as I know) not *typically* used in an NHST framework. For people trained under an NHST paradigm (like me), this sometimes feels frustrating---we crave binary decision rules ("Is it significant or not? Do I reject the null hypothesis or not?")---but I do think there's value in trying to become more comfortable with continuity. The world is fuzzy and uncertain, so perhaps it's good to acquaint ourselves with thinking about the relative strength of evidence for different models, rather than approaching theory construction from the perspective of which models are "correct" vs. "incorrect". 
+
+
+
+# Bayesian Information Criterion (AIC)
+
+Another well-known information-theoretic criterion for model selection is [Bayesian information criterion](https://en.wikipedia.org/wiki/Bayesian_information_criterion), or **BIC**. I'm not going to go into great detail about BIC here, but it's defined as follows:
+
+$BIC = -2*log(\mathcal{L}) + K*log(n)$
+
+Where $\mathcal{L}$ is the likelihood of the data given the model, $K$ is the number of parameters in the model, and $n$ is the sample size.
+
+## BIC vs. AIC 
+
+This formula looks pretty similar to the formula for $AIC$! Both formulas incorporate the term $-2 * log(\mathcal{L})$, and both also incorporate the number of parameters $K$. Like $AIC$, smaller values of $BIC$ reflect better model fit. The key difference is that unlike "vanilla" $AIC$, $BIC$ incorporates information about the sample size ($n$). Of course, we saw that corrected AIC, i.e., $AIC_c$, *does* account for sample size. 
+
+Is there a theoretical reason to prefer one over the other? Burnham and Anderson (2004) suggest that many Bayesian-oriented people prefer BIC because it is a Bayesian procedure; as they point out, however, model selection rooted in AIC can also be Bayesian (pg. 283-284):
+
+> The difference is in the prior distribution placed on the model set. Hence, for a Bayesian procedure, the argument about BIC versus AIC must reduce to one about priors on the models. 
+
+Personally, I have a hard time getting intuition about different formulas until I actually *see* what values they produce. Before, we compared vanilla $AIC$ with $AIC_c$. Here, let's compare $BIC$ to both.
+
+```{r}
+## Possible likelihood values
+l = seq(.1, .99, length.out = 20)
+## Sample sizes
+n = seq(20, 400, length.out = 20)
+## Number of parameters
+k = seq(1, 10, length.out = 20)
+
+## Extended AIC
+bic = function(l, k, n) {
+  bic = -2*log(l) + k *log(n)
+  bic
+}
+
+## Create grid of models
+df_models = expand.grid(n=n,
+                        k=k,
+                        likelihood = l)
+## Calculate AIC
+df_models = df_models %>%
+  mutate(aic1 = aic_og(likelihood, k),
+         aic2 = aic_c(likelihood, k, n),
+         bic = bic(l, k, n))
+
+```
+
+Let's see how these values compare: 
+
+```{r}
+df_models %>%
+  ggplot(aes(x = aic1,
+             y = bic,
+             color = k)) +
+  geom_abline(aes(slope = 1, intercept = 0), 
+              linetype = "dotted") +
+  geom_point(alpha = .5) +
+  labs(x = "AIC (vanilla)",
+       y = "BIC") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0, max(df_models$bic))) +
+  scale_y_continuous(limits = c(0, max(df_models$bic))) +
+  facet_wrap(~n)
+
+df_models %>%
+  ggplot(aes(x = aic2,
+             y = bic,
+             color = k)) +
+  geom_abline(aes(slope = 1, intercept = 0), 
+              linetype = "dotted") +
+  geom_point(alpha = .5) +
+  labs(x = "AIC (corrected)",
+       y = "BIC") +
+  theme_bw() +
+  scale_x_continuous(limits = c(0, max(df_models$bic))) +
+  scale_y_continuous(limits = c(0, max(df_models$bic))) +
+  facet_wrap(~n)
+
+```
+
+
+We see that relative to vanilla $AIC$, $BIC$ is larger for both larger values for $n$ and $K$; this makes sense, because vanilla $AIC$ doesn't penalize small sample sizes at all. And the $K*log(n)$ multiplier means that models with more parameters (larger values of $K$) will be penalized more in $BIC$ than $AIC$ (unless $log(n) < 2$).
+
+$BIC$ is also larger than $AIC_c$ for *most* sample sizes, except for very small samples (like $n = 20$). 
+
+
+# Multimodel inference
+
+So far, we've discussed various approaches for **selecting** the best model from a set of candidate models $M$, with the ultimate goal of using $m_i$ to perform **inference**. Burnham & Anderson (2004) describe the "four steps" of model selection as follows:
+
+1. We want to perform model-based inference from data.  
+2. There are $M$ possible models, but we don't know which one should be used.  
+3. We select among these "competing" models using the data at hand.  
+4. Using the "best" model, we draw inferences from it "as if it were a priori the only model fit to the data" (pg. 298).  
+
+Burnham & Anderson (2004) criticize the logic of steps (3) and (4). They argue that there's no philosophical justification for performing inference from a *single* model, as if it was the only model under consideration. Of course, there is (by definition) always one model that is "best", in terms of having the lowest AIC or BIC value---or, in the case of an NHST framework, a model with *significantly* better fit to the data than some reduced model. But that doesn't mean we should ignore all the other models under consideration, especially if the second-best or third-best models come close to the very best model. Often, these second-best or third-best models even capture variance that's *not* explained by the best model (at least in the case of non-nested models). Why should we throw that explanatory power away?
+
+The alternative to **model selection** is called **multimodel inference**, and the basic idea is that inference should be based on *all* the models in the *a priori* set, not just the best model. What exactly does this mean? 
+
+## Averaging model predictions
+One approach to multimodel inference is called **model averaging**, and is best-suited to evaluating the *predictions* of our models^[I'm not *positive* about this, but I assume this should be done on a held-out set. If anyone reading this knows whether or not this is true, please let me know!]. Specifically, we can derive a set of predictions $\hat{y}_i$ for each model $m_i$ in our candidate set $M$. We then **average** those predictions together, weighting the predictions across the models according to the probability of the model (see the section on $AIC$ for details on calculating model probability):
+
+$\bar{Y} = \sum\limits_{i=1}^Mp_i\hat{y_i}$
+
+This makes intuitive sense. We want to account for the predictions of *all* our models, but we also want to account for the fact that some models are more likely (given the data) than others. According to Burnham & Anderson (2004), predictions derived from model-averaged estimators (as opposed to a single model) yield a "more honest measure of precision and reduced bias" (pg. 274). 
+
+## Averaging model parameters
+
+If some parameter $\theta$ is shared across all models, we can take the **weighted average** of estimates for that parameter value across those models (just as we did for predictions):
+
+$\bar{\theta} = \sum\limits_{i=1}^Mp_i\hat{\theta_i}$
+
+
+
+## Model precision
+
+(pg. 26)
+
+
+## Many models vs. one "big" model
+
+
+DISCUSS: 
+
+Many models vs. one global model: see pg. 30 of Burnham et al (2011). Why not put all factors into a "big" model? The issue is that a given dataset is limited in information; each itme more parameters are added and estimated, the information left is reduced, and the probability of ifnding spurious effects is increased. New parameters are estimated but with increasing uncertainty. 
+
 
 # Contact
 
-If you have any questions, comments, or criticisms about anything in this tutorial, don't hesitate to contact me by email: the username is "sttrott"," at *ucsd.edu*. I'll likely augment this tutorial with more details (or pointers to other resources) over time.
+This tutorial is by no means exhaustive. Right now, there's no discussion of [**Bayes Factors**](https://en.wikipedia.org/wiki/Bayes_factor), an increasingly popular approach to assessing ength of evidence for two models. There's also no in-depth discussion of [Bayesian information criterion](https://en.wikipedia.org/wiki/Bayesian_information_criterion). Those are both things I hope to add.
+
+If you'd like to see anything else in this tutorial, or have various questions, comments, or criticisms, don't hesitate to contact me by email: the username is "sttrott"," at *ucsd.edu*. I'll likely augment this tutorial with more details (or pointers to other resources) over time.
 
 # References
 
-Barr, D. J., Levy, R., Scheepers, C., & Tily, H. J. (2013). Random effects structure for confirmatory hypothesis testing: Keep it maximal. Journal of memory and language, 68(3), 255-278. [Link](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3881361/)
+Akaike, H. (1974). A new look at the statistical model identification. IEEE transactions on automatic control, 19(6), 716-723.
 
-Bates, D., Mächler, M., Bolker, B., & Walker, S. (2014). Fitting linear mixed-effects models using lme4. arXiv preprint arXiv:1406.5823. [Link](https://arxiv.org/pdf/1406.5823.pdf)
+Anderson, D. R., & Burnham, K. P. (2002). Avoiding pitfalls when using information-theoretic methods. The Journal of Wildlife Management, 912-918.
 
-Bates, D., Kliegl, R., Vasishth, S., & Baayen, H. (2015). Parsimonious mixed models. arXiv preprint arXiv:1506.04967. [Link](https://arxiv.org/pdf/1506.04967.pdf)
+Burnham, K. P., & Anderson, D. R. (2004). Multimodel inference: understanding AIC and BIC in model selection. Sociological methods & research, 33(2), 261-304.
 
-Clark (2019, May 14). Michael Clark: Shrinkage in Mixed Effects Models. Retrieved from https://m-clark.github.io/posts/2019-05-14-shrinkage-in-mixed-models/ [Link](https://m-clark.github.io/posts/2019-05-14-shrinkage-in-mixed-models/)
+Burnham, K. P., Anderson, D. R., & Huyvaert, K. P. (2011). AIC model selection and multimodel inference in behavioral ecology: some background, observations, and comparisons. Behavioral ecology and sociobiology, 65(1), 23-35.
 
-Freeman, M. Hierarchical Models. [Link](http://mfviz.com/hierarchical-models/)
+Edwards, A. W. (1992). F. 1972. Likelihood. London: The Johns HopkinsUniversity PressEdwardsLikelihood1972.
 
-Piccininni, P. Linear mixed effects models. [Link](https://pagepiccinini.com/r-course/lesson-6-part-1-linear-mixed-effects-models/) 
+Etz, A. (2018). Introduction to the concept of likelihood and its applications. Advances in Methods and Practices in Psychological Science, 1(1), 60-69.
 
-Winter, B. (2013). Linear models and linear mixed effects models in R with linguistic applications. arXiv preprint arXiv:1308.5499. [Link](https://arxiv.org/ftp/arxiv/papers/1308/1308.5499.pdf)
+Lewis, F., Butler, A., & Gilbert, L. (2011). A unified approach to model selection using the likelihood ratio test. Methods in Ecology and Evolution, 2(2), 155-162.
+
+McShane, B. B., Gal, D., Gelman, A., Robert, C., & Tackett, J. L. (2019). Abandon statistical significance. The American Statistician, 73(sup1), 235-245.
+
+Wagenmakers, E. J. (2007). A practical solution to the pervasive problems of p values. Psychonomic bulletin & review, 14(5), 779-804.
 
 # Citation
 
 For citation, please cite as:
 
-Trott, S. (2019). Mixed models in R. Retrieved from https://seantrott.github.io/mixed_models_R/.
+Trott, S. (2020). Model comparison.
 
 # Footnotes
