@@ -1,5 +1,6 @@
 ---
 title: "Introduction to model comparisons"
+author: "Sean Trott"
 output:
   html_document:
     toc: yes
