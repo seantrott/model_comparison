@@ -30,12 +30,13 @@ Additionally, this tutorial will likely change over time as I learn more about t
 
 # Logistics
 
-First, logistics. We'll be working with three main libraries: `library(tidyverse)` and `library(lme4)` and `library(lmtest)`. If you don't have them installed already, use `install.packages("tidyverse")` and `install.packages("lme4")` and `install.packages("lmtest")` to install them.
+First, logistics. We'll be using four libraries: `library(tidyverse)`, `library(lme4)`,  `library(lmtest)`, and `library(ggridges)`. If you don't have them installed already, use `install.packages("tidyverse")`, `install.packages("lme4")`, `install.packages("lmtest")`, and `install.packages("ggridges")` to install them.
 
 ```{r include=FALSE}
 library(tidyverse)
 library(lme4)
 library(lmtest)
+library(ggridges)
 ```
 
 
@@ -1111,11 +1112,70 @@ Burnham & Anderson (2004) criticize the logic of steps (3) and (4). They argue t
 The alternative to **model selection** is called **multimodel inference**, and the basic idea is that inference should be based on *all* the models in the *a priori* set, not just the best model. What exactly does this mean? 
 
 ## Averaging model predictions
+
 One approach to multimodel inference is called **model averaging**, and is best-suited to evaluating the *predictions* of our models^[I'm not *positive* about this, but I assume this should be done on a held-out set. If anyone reading this knows whether or not this is true, please let me know!]. Specifically, we can derive a set of predictions $\hat{y}_i$ for each model $m_i$ in our candidate set $M$. We then **average** those predictions together, weighting the predictions across the models according to the probability of the model (see the section on $AIC$ for details on calculating model probability):
 
 $\bar{Y} = \sum\limits_{i=1}^Mp_i\hat{y_i}$
 
-This makes intuitive sense. We want to account for the predictions of *all* our models, but we also want to account for the fact that some models are more likely (given the data) than others. According to Burnham & Anderson (2004), predictions derived from model-averaged estimators (as opposed to a single model) yield a "more honest measure of precision and reduced bias" (pg. 274). 
+This makes intuitive sense. We want to account for the predictions of *all* our models, but we also want to account for the fact that some models are more likely (given the data) than others. Altogether, predictions derived from **weighted averages** across our models (as opposed to a single model) yield a "more honest measure of precision and reduced bias" (Burnham and Anderson, 2004, pg. 274). 
+
+Let's illustrate this with a quick example. Imagine we have three models, $M = [m_1, m_2, m_3]$, which have the following (rescaled) $AIC$ values:
+
+```{r}
+aic_rescaled = c(0, 2, 4)
+```
+
+We can calculate the likelihood $\ell_i$ of each model given the data, and then calculate thir *normalized probabilities* $p_i$ (also known as **Akaike weights**):
+
+```{r}
+L = exp(-(1/2) * aic_rescaled)
+L
+p = L / sum(L)
+p
+```
+
+Now let's suppose that each model has a set of predictions $\hat{Y}_i$. Here, we won't worry about what the "real" data look like, as the point is simply to illustrate how to generate weighted predictions. To make this simpler, let's suppose that each model is just producing a normal distribution:
+
+```{r}
+y1 = rnorm(mean = 70, sd = 3, n = 50)
+y2 = rnorm(mean = 68, sd = 5, n = 50)
+y3 = rnorm(mean = 73, sd = 8, n = 50)
+```
+
+While we *could* just average these predictions in an unweighted way, we know that these models have pretty different fits. Thus, we should be more confident about predictions from $m_1$, which has a normalized probability of `r round(p[1], 2)`, than $m_3$, which has a normalized probability of `r round(p[3], 2)`.
+
+Below, I'll compute both the unweighted and weighted average predictions:
+
+```{r}
+y_unweighted = (y1 + y2 + y3)/3
+y_weighted = y1 * p[1] + y2 * p[2] + y3 * p[3]
+
+```
+
+Now let's visuaslize all these predictions next to each other. We see that the predictions from our best model ($m_1$) are closest in shape to the weighted average (and also to the unweighted average), which makes sense because the predictions from that model were weighted most heavily. Feel free to play around with the parameters of each model above, as well as the Akaike weights.
+
+```{r}
+df_all_preds = data.frame(
+  y1 = y1,
+  y2 = y2, 
+  y3 = y3,
+  y_weighted = y_weighted,
+  y_unweighted = y_unweighted
+) %>%
+  pivot_longer(cols = c(y1, y2, y3, y_weighted, y_unweighted),
+               names_to = "model", values_to = "prediction")
+
+df_all_preds %>%
+  ggplot(aes(x = prediction,
+             y = model,
+             fill = model)) +
+  geom_density_ridges2(aes(height = ..density..), 
+                       color=gray(0.25), alpha = 0.5, 
+                       scale=0.85, size=0.75, stat="density") +
+  theme_minimal()
+```
+
+
 
 ## Averaging model parameters
 
@@ -1123,20 +1183,19 @@ If some parameter $\theta$ is shared across all models, we can take the **weight
 
 $\bar{\theta} = \sum\limits_{i=1}^Mp_i\hat{\theta_i}$
 
+The logic here is the same as for averaging model predictions: we can obtain a better estimate of the true population parameter if we average across *many* estimates of that parameter. 
 
+Obviously, if you were forced to choose only one parameter estimate, you'd probably want to choose the one from the better model (i.e., the one that fits the data better). But if you've already constructed multiple candidate models, and if each model is theoretically justified in its own way, and *especially* if the spread of AIC values is not that wide (i.e., the best model isn't *that* much worse than the worst model), you'll often have better luck using the average parameter estimate. 
 
-## Model precision
-
-(pg. 26)
-
+As I understand this (and I could be wrong!), it's similar to the Central Limit Theorem: taking the mean of many sample means gets you closer to the population mean than relying on any given sample mean alone. If you had many different datasets, you might similarly imagine fitting the same model $m_i$ to each dataset and taking the average estimate of some parameter $\theta$. The situation here is the reverse---we fit many different **models** to the same dataset, and take the average estimate of $\theta$ across those models. And again, because it's a weighted average, it will reflect how well each model fits the data.
 
 ## Many models vs. one "big" model
 
+One question that arises is what the "point" of multimodel inference is, at least when it comes to estimating a given parameter. Rather than build many small models with various predictors, why not simply construct one "big", global model with all the factors you could possibly be interested in?
 
-DISCUSS: 
+Burnham et al (2011, pg. 30) argue that datasets are limited in information. Each time another new parameter is added and estimated, the information left in the dataset is reduced---and the probability of finding spurious effects is increased. You can certainly *estimate* new parameters, but with increasing uncertainty. Thus, they recommend building a number of theoretically motivated models to explain the dependent variable, then calculating AIC for each model and averaging the predictors (or parameters) across these models using the Akaike weights.
 
-Many models vs. one global model: see pg. 30 of Burnham et al (2011). Why not put all factors into a "big" model? The issue is that a given dataset is limited in information; each itme more parameters are added and estimated, the information left is reduced, and the probability of ifnding spurious effects is increased. New parameters are estimated but with increasing uncertainty. 
-
+To be honest, I'm not sure what current "best practices" are here, especially with the rise of techniques like [multilevel modeling](https://en.wikipedia.org/wiki/Multilevel_model). Additionally, the rationale given by Burnham et al (2011) basically comes down to datasets containing limited information---and I assume this argument holds less water when you're working with massive datasets. That said, the point that predictions and parameter estimates have less bias when you're averaging across multiple models may still well be true, and worth considering.
 
 # Contact
 
@@ -1168,6 +1227,6 @@ Wagenmakers, E. J. (2007). A practical solution to the pervasive problems of p v
 
 For citation, please cite as:
 
-Trott, S. (2020). Model comparison.
+Trott, S. (2021). Model comparison.
 
 # Footnotes
