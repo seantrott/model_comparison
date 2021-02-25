@@ -747,11 +747,11 @@ This last bit is explored further below, but the point of this section is to dri
 
 Where does this formula come from? To start, recall that Akaike demonstrated the following equivalence:
 
-$\hat{E}(KL) = log(L) - K$
+$\hat{E}(KL) = log(\mathcal{L}) - K$
 
 This states that the relative information loss is equal to the log likelihood of a model, minus the number of parameters ($K$). According to Burnham & Anderson (2004), Akaike then multiplied this result by $-2$ "for historical reasons", giving us the final value:
 
-$AIC = -2*log(L) + 2k = 2k - 2*log(L)$
+$AIC = -2*log(L) + 2k = 2k - 2*log(\mathcal{L})$
 
 Using this definition, a **lower AIC** is "better". Recall that *smaller* negative log-likelihood values are better, and the formula is essentially calculating the negative log-likelihood ($-2 * log(L)$). To get a better sense of how exactly AIC, likelihood, and number of parameters relate, let's simulate some "models" with varying likelihoods and number of parameters.
 
@@ -808,7 +808,7 @@ df_models %>%
 
 Note that if the number of parameters ($K$) is quite large relative to the sample size ($n$), there is a "small-sample" version of AIC called $AIC_c$. This looks essentially like the formula above, but adds another term:
 
-$AIC = AIC + \frac{2K(K + 1)}{n - K - 1}$
+$AIC_c = AIC + \frac{2K(K + 1)}{n - K - 1}$
 
 What exactly does this additional "correction" term do? The basic idea is that it adds a correction that's scaled to the relative difference btween the number of parameters and the number of observations.
 
