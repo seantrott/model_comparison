@@ -28,6 +28,8 @@ So keeping that in mind, the main goals of this tutorial are to address the foll
 
 Additionally, this tutorial will likely change over time as I learn more about the domain (mostly in the direction of including more details and content). So if you see anything missing, please let me know and I will try to add it.
 
+If you want to see the slides from a presentation of this tutorial, see [here](https://seantrott.github.io/model_comparison/presentation.html).
+
 # Logistics
 
 First, logistics. We'll be using four libraries: `library(tidyverse)`, `library(lme4)`,  `library(lmtest)`, and `library(ggridges)`. If you don't have them installed already, use `install.packages("tidyverse")`, `install.packages("lme4")`, `install.packages("lmtest")`, and `install.packages("ggridges")` to install them.
