@@ -664,7 +664,7 @@ So we can calculate the p-value for this $\delta$ value by looking it up in a ch
 pchisq(delta, 1, lower.tail = FALSE)
 ```
 
-That's a very low p-value! This means that we're very likely to have achieved a value this large under the null distribution. We can double-check our work using the `lrtest` function:
+That's a very low p-value! This means that we're very unlikely to have achieved a value this large under the null distribution. We can double-check our work using the `lrtest` function:
 
 ```{r}
 lrtest(m, m2)
